@@ -2,6 +2,8 @@
 
 This project demonstrates a minimal implementation of Google's **Agent-to-Agent (A2A) Protocol** using Python.
 
+Full details: https://medium.com/@pankajchandravanshi/82676bc27144?source=friends_link&sk=3816931bf7f60690895e9132d98d5d98
+
 It features:
 
 - A simple A2A server agent (`TellDateTimeTimezoneAgent`) built with Flask  
@@ -38,7 +40,7 @@ a2a_samples/
 ### 1️⃣ Install dependencies
 
 ```bash
-pip install flask requests tzlocal
+uv add flask requests tzlocal
 ```
 
 ---
@@ -47,7 +49,11 @@ pip install flask requests tzlocal
 
 ```bash
 cd a2a_samples/server
-python tell_datetime_timezone_server.py
+uv init .
+uv venv
+source .venv/bin/activate
+uv add flask tzlocal
+uv run tell_datetime_timezone_server.py
 ```
 
 ---
@@ -58,7 +64,7 @@ In a separate terminal:
 
 ```bash
 cd a2a_samples/client
-python datetime_timezone_client.py
+uv run datetime_timezone_client.py
 ```
 
 ---
