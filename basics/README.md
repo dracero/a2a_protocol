@@ -37,15 +37,7 @@ a2a_samples/
 
 ## 🧪 How to Run
 
-### 1️⃣ Install dependencies
-
-```bash
-uv add flask requests tzlocal
-```
-
----
-
-### 2️⃣ Start the server
+### 1 Start the server
 
 ```bash
 cd a2a_samples/server
@@ -58,7 +50,7 @@ uv run tell_datetime_timezone_server.py
 
 ---
 
-### 3️⃣ Run the client
+### 2 Run the client
 
 In a separate terminal:
 
