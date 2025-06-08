@@ -86,14 +86,10 @@ Agents can now communicate across boundaries using a well-defined, structured pr
 
 ---
 
-## 📌 Placeholder for A2A Protocol Diagram
-
-<!-- You can add a diagram here illustrating:
+## 📌 A2A Protocol Diagram
      - A2A Client → Discovery → Agent Card
      - Client → Task Send → Server
      - Server → Response → Client
--->
-
 ---
 
 ## License
