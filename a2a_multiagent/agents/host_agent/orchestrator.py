@@ -10,9 +10,19 @@ import uuid                         # For generating unique identifiers (e.g., s
 import logging                      # Standard library for configurable logging
 from dotenv import load_dotenv      # Utility to load environment variables from a .env file
 
+# Print current working directory and .env location for debug
+env_path = os.path.join(os.getcwd(), '.env')
+print(f"[DEBUG] CWD: {os.getcwd()} | Looking for .env at: {env_path}")
+
 # Load the .env file so that environment variables like GOOGLE_API_KEY
 # are available to the ADK client when creating LLMs
-load_dotenv()
+load_dotenv(dotenv_path=env_path)
+
+# Check if GOOGLE_API_KEY is loaded
+if not os.environ.get("GOOGLE_API_KEY"):
+    print("[WARNING] GOOGLE_API_KEY not found in environment! Check your .env file and location.")
+else:
+    print("[DEBUG] GOOGLE_API_KEY loaded from environment.")
 
 # -----------------------------------------------------------------------------
 # Google ADK / Gemini imports

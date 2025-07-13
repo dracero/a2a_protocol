@@ -158,7 +158,7 @@ class GreetingAgent:
 
         # Finally, create and return the LlmAgent with everything wired up
         return LlmAgent(
-            model="gemini-1.5-flash",               # which Gemini model
+            model="gemini-2.5-flash",               # which Gemini model
             name="greeting_orchestrator",                  # internal name
             description="Orchestrates time fetching and generates poetic greetings.",
             instruction=system_instr,                      # system prompt
