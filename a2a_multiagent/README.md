@@ -97,14 +97,21 @@ Para iniciar los agentes y el orquestador, sigue estos pasos:
       --host localhost --port 10001
    ```
 
-3. **Iniciar el orquestador (agente host)**:
+3. **Iniciar el agente de física**:
+
+   ```bash
+   uv run -m agents.asistente_fisica \
+     --host localhost --port 10003
+   ```
+
+4. **Iniciar el orquestador (agente host)**:
 
    ```bash
    uv run -m agents.host_agent.entry \
      --host localhost --port 10002
    ```
 
-4. **Lanzar la CLI (cmd.py)**:
+5. **Lanzar la CLI (cmd.py)**:
 
    ```bash
    uv run -m app.cmd.cmd --agent http://localhost:10002
