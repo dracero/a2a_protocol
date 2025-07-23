@@ -79,15 +79,7 @@ class TellDateTimeTimezoneAgent:
     async def invoke(self, query: str, session_id: str) -> str:
         """
         📥 Handle a user query and return a response string with date, time, and timezone.
-        
-        Args:
-            query (str): User input (e.g., "what is the current time?")
-            session_id (str): Helps group messages into a session
-        
-        Returns:
-            str: Agent's reply with current date, time, and timezone.
         """
-
         session = await self._runner.session_service.get_session(
             app_name=self._agent.name,
             user_id=self._user_id,
@@ -107,18 +99,22 @@ class TellDateTimeTimezoneAgent:
             parts=[types.Part.from_text(text=query)]
         )
 
-        last_event = None
+        respuesta = None
         async for event in self._runner.run_async(
             user_id=self._user_id,
             session_id=session.id,
             new_message=content
         ):
-            last_event = event
+            if event and event.content and event.content.parts:
+                texto = "\n".join([p.text for p in event.content.parts if p.text])
+                if texto:
+                    respuesta = texto
+                    break
 
-        if not last_event or not last_event.content or not last_event.content.parts:
-            return ""
+        if respuesta:
+            return respuesta
 
-        return "\n".join([p.text for p in last_event.content.parts if p.text])
+        return "No se pudo obtener respuesta del agente."
 
     async def stream(self, query: str, session_id: str):
         """

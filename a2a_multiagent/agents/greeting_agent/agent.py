@@ -184,44 +184,53 @@ class GreetingAgent:
         https://github.com/google/adk-python/commit/1804ca39a678433293158ec066d44c30eeb8e23b
 
         """
-        # 1) Try to fetch an existing session
-        session = await self.runner.session_service.get_session(
-            app_name=self.orchestrator.name,
-            user_id=self.user_id,
-            session_id=session_id,
-        )
-
-        # 2) If not found, create a new session with empty state
-        if session is None:
-            session = await self.runner.session_service.create_session(
+        try:
+            # 1) Try to fetch an existing session
+            session = await self.runner.session_service.get_session(
                 app_name=self.orchestrator.name,
                 user_id=self.user_id,
                 session_id=session_id,
-                state={},  # you could prefill memory here if desired
             )
 
-        # 3) Wrap the user’s text in a Gemini Content object
-        content = types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=query)]
-        )
+            # 2) If not found, create a new session with empty state
+            if session is None:
+                session = await self.runner.session_service.create_session(
+                    app_name=self.orchestrator.name,
+                    user_id=self.user_id,
+                    session_id=session_id,
+                    state={},  # you could prefill memory here if desired
+                )
 
-        # 🚀 Run the agent using the Runner and collect the last event
-        last_event = None
-        async for event in self.runner.run_async(
-            user_id=self.user_id,
-            session_id=session.id,
-            new_message=content
-        ):
-            last_event = event
+            # 3) Wrap the user’s text in a Gemini Content object
+            content = types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=query)]
+            )
 
-        # 🧹 Fallback: return empty string if something went wrong
-        if not last_event or not last_event.content or not last_event.content.parts:
+            # 🚀 Run el agente usando el Runner y recolecta todos los eventos generados
+            respuesta_principal = None
+            async for event in self.runner.run_async(
+                user_id=self.user_id,
+                session_id=session.id,
+                new_message=content
+            ):
+                # Busca el primer evento con partes de texto y rol "model" o "assistant"
+                if event and event.content and event.content.parts:
+                    if getattr(event.content, "role", None) in ["model", "assistant"]:
+                        respuesta_principal = "\n".join([p.text for p in event.content.parts if p.text])
+                        break
+                    # Si no tiene rol, igual toma el primero con partes de texto
+                    if not respuesta_principal:
+                        respuesta_principal = "\n".join([p.text for p in event.content.parts if p.text])
+            # Si no se encontró respuesta principal, usa la última
+            if respuesta_principal:
+                return respuesta_principal
             return ""
-
-        # Extract and join all text responses into one string
-        return "\n".join([p.text for p in last_event.content.parts if p.text])
+        except Exception as e:
+            logger.error(f"Error in GreetingAgent.invoke: {e}")
+            return f"Error: {str(e)}"
     
+"""
 import asyncio
 
 if __name__ == "__main__":
@@ -232,3 +241,4 @@ if __name__ == "__main__":
         print(result)
 
     asyncio.run(main())
+"""

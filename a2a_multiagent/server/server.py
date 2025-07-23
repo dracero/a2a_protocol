@@ -89,7 +89,7 @@ class A2AServer:
 
         # Dynamically import uvicorn so it’s only loaded when needed
         import uvicorn
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        uvicorn.run(self.app, host=self.host, port=self.port, timeout_keep_alive=120)
 
     # -----------------------------------------------------------------------------
     # 🔎 _get_agent_card(): Return the agent’s metadata (GET request)

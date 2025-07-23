@@ -91,39 +91,44 @@ class GreetingTaskManager(InMemoryTaskManager):
         Returns:
             SendTaskResponse: A JSON-RPC response with the completed Task
         """
-        # Log receipt of a new task along with its ID
-        logger.info(f"GreetingTaskManager received task {request.params.id}")
+        try:
+            # Log receipt of a new task along with its ID
+            logger.info(f"GreetingTaskManager received task {request.params.id}")
 
-        # Step 1: Save or update the task in memory.
-        # upsert_task() will create a new Task if it doesn't exist,
-        # or append the incoming user message to existing history.
-        task = await self.upsert_task(request.params)
+            # Step 1: Save or update the task in memory.
+            task = await self.upsert_task(request.params)
 
-        # Step 2: Extract the actual text the user sent
-        user_text = self._get_user_text(request)
+            # Step 2: Extract the actual text the user sent
+            user_text = self._get_user_text(request)
 
-        # Step 3: Call the GreetingAgent to generate a greeting text.
-        # Since GreetingAgent.invoke() might be an async function,
-        # await it to get the returned string.
-        greeting_text = await self.agent.invoke(
-            user_text,
-            request.params.sessionId
-        )
+            # Step 3: Call the GreetingAgent to generate a greeting text.
+            greeting_text = await self.agent.invoke(
+                user_text,
+                request.params.sessionId
+            )
 
-        # Step 4: Wrap the greeting string in a TextPart, then in a Message
-        reply_message = Message(
-            role="agent",               # Mark this as an "agent" response
-            parts=[TextPart(text=greeting_text)]  # The agent's reply text
-        )
+            # Step 4: Wrap the greeting string in a TextPart, then in a Message
+            reply_message = Message(
+                role="agent",               # Mark this as an "agent" response
+                parts=[TextPart(text=greeting_text)]  # The agent's reply text
+            )
 
-        # Step 5: Update the task status to COMPLETED and append our reply
-        # Use the lock to avoid race conditions with other coroutines.
-        async with self.lock:
-            # Mark the task as done
-            task.status = TaskStatus(state=TaskState.COMPLETED)
-            # Add the agent's reply to the task's history
-            task.history.append(reply_message)
+            # Step 5: Update the task status to COMPLETED and append our reply
+            # Use the lock to avoid race conditions with other coroutines.
+            async with self.lock:
+                # Mark the task as done
+                task.status = TaskStatus(state=TaskState.COMPLETED)
+                # Add the agent's reply to the task's history
+                task.history.append(reply_message)
 
-        # Step 6: Return a SendTaskResponse, containing the JSON-RPC id
-        # (mirroring the request.id) and the updated Task model.
-        return SendTaskResponse(id=request.id, result=task)
+            # Step 6: Return a SendTaskResponse, containing the JSON-RPC id
+            # (mirroring the request.id) and the updated Task model.
+            return SendTaskResponse(id=request.id, result=task)
+        except Exception as e:
+            logger.error(f"Error in on_send_task: {e}")
+            # Mark the task as failed and append error message
+            async with self.lock:
+                task.status = TaskStatus(state=TaskState.FAILED)
+                error_message = Message(role="agent", parts=[TextPart(text=f"Error: {str(e)}")])
+                task.history.append(error_message)
+            return SendTaskResponse(id=request.id, result=task)

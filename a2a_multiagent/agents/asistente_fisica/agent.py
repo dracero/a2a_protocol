@@ -1,8 +1,12 @@
-# Asistente de Física Unificado - Versión PC con ADK y RAG
+# Desactivar OpenTelemetry y tracing globalmente
 import os
+os.environ["OTEL_SDK_DISABLED"] = "true"
+os.environ["OTEL_TRACES_EXPORTER"] = "none"
+os.environ["OTEL_METRICS_EXPORTER"] = "none"
+
+# Asistente de Física Unificado - Versión PC con ADK y RAG
 import json
 import time
-import asyncio
 import logging
 import torch
 from PyPDF2 import PdfReader
@@ -13,7 +17,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage, SystemMessage
 from langchain.memory import ConversationSummaryBufferMemory
 from dotenv import load_dotenv
-
+from models.agent import AgentCard, AgentCapabilities, AgentSkill
 # Imports ADK
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.sessions import InMemorySessionService
@@ -53,6 +57,10 @@ class AsistenteFisica:
         self.qdrant_url = os.getenv("QDRANT_URL")
         self.qdrant_api_key = os.getenv("QDRANT_KEY")
         self.collection_name = "documentos_pdf"
+
+        # Inicializar agent_card y skills
+        self.agent_card = None
+        self.skills = []
 
         print("✅ AsistenteFisica inicializado correctamente")
 
@@ -172,44 +180,98 @@ IMPORTANTE: Actúa como un profesor experto con pleno conocimiento."""
 
     # Método de comunicación principal - Compatible con el segundo script
     async def invoke(self, query: str, session_id: str = "default_session") -> str:
-        """Método principal de comunicación compatible con el patrón del segundo script"""
+        """Método de comunicación principal con debug mejorado"""
+        logger.info(f"🔍 Invoke llamado con query: {query[:100]}... session_id: {session_id}")
+        
         try:
+            # Verificar inicialización del runner
+            if self.runner is None:
+                logger.warning("⚠️ Runner no inicializado, inicializando componentes...")
+                self.inicializar_componentes()
+                if self.runner is None:
+                    raise Exception("No se pudo inicializar el runner")
+            
+            logger.info("✅ Runner disponible, creando/obteniendo sesión...")
+            
             # Obtener o crear sesión
             session = await self.runner.session_service.get_session(
                 app_name=self.name,
                 user_id="fisica_user",
                 session_id=session_id,
             )
+            
             if session is None:
+                logger.info("📝 Creando nueva sesión...")
                 session = await self.runner.session_service.create_session(
                     app_name=self.name,
                     user_id="fisica_user",
                     session_id=session_id,
                     state={},
                 )
-
-            # Procesar consulta através del sistema RAG completo
+            
+            logger.info("✅ Sesión obtenida/creada, procesando con RAG...")
+            
+            # Procesar con RAG
             respuesta_rag = await self.iniciar_flujo_rag(query, user_id="fisica_user")
+            logger.info(f"✅ RAG procesado: {respuesta_rag[:100]}...")
             
-            # Enviar respuesta através del sistema ADK
-            message = types.Content(role="user", parts=[types.Part(text=f"Consulta: {query}\n\nRespuesta procesada: {respuesta_rag}")])
+            # Crear mensaje para el runner
+            message = types.Content(
+                role="user", 
+                parts=[types.Part(text=f"Consulta: {query}\n\nRespuesta procesada: {respuesta_rag}")]
+            )
             
-            last_event = None
+            logger.info("🚀 Ejecutando runner...")
+            
+            # Ejecutar runner
+            respuesta = None
+            event_count = 0
+            
             async for event in self.runner.run_async(
                 user_id="fisica_user",
                 session_id=session_id,
                 new_message=message
             ):
-                last_event = event
-
-            if last_event and last_event.content and last_event.content.parts:
-                return "\n".join([p.text for p in last_event.content.parts if p.text])
+                event_count += 1
+                logger.info(f"📨 Evento {event_count} recibido del runner")
+                
+                if event and event.content and event.content.parts:
+                    texto = "\n".join([p.text for p in event.content.parts if p.text])
+                    if texto:
+                        respuesta = texto
+                        logger.info(f"✅ Respuesta del runner: {respuesta[:100]}...")
+                        break
             
-            return respuesta_rag
-
+            # Retornar respuesta
+            if respuesta:
+                logger.info("✅ Retornando respuesta del runner")
+                return respuesta
+            else:
+                logger.info("⚠️ No se obtuvo respuesta del runner, retornando RAG")
+                return respuesta_rag
+                
         except Exception as e:
-            logger.error(f"Error en invoke: {e}")
-            return f"Error al procesar la consulta: {str(e)}"
+            logger.error(f"❌ Error en invoke: {e}")
+            logger.error(f"❌ Tipo de error: {type(e)}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            
+            # Fallback: intentar respuesta directa sin runner
+            try:
+                logger.info("🔄 Intentando fallback sin runner...")
+                if hasattr(self, 'llm') and self.llm:
+                    from langchain.schema import HumanMessage, SystemMessage
+                    messages = [
+                        SystemMessage(content="Eres un experto en física. Responde de manera clara y didáctica."),
+                        HumanMessage(content=query)
+                    ]
+                    response = self.llm(messages)
+                    return response.content
+                else:
+                    return f"Error: El agente no está correctamente configurado. {str(e)}"
+            except Exception as fallback_error:
+                logger.error(f"❌ Error en fallback: {fallback_error}")
+                return f"Error procesando la consulta: {str(e)}"
 
     # Métodos RAG del primer script
     def leer_pdf(self, nombre_archivo):
@@ -242,7 +304,7 @@ IMPORTANTE: Actúa como un profesor experto con pleno conocimiento."""
 
         self.contenido_completo = contenido_completo
 
-        # Extraer temario
+        # Extraer temario usando LLM
         system_message = f"""
 Eres un experto profesor Física I de la Universidad de Buenos Aires.
 Utiliza el siguiente contenido como referencia:
@@ -250,14 +312,11 @@ Utiliza el siguiente contenido como referencia:
 {self.contenido_completo}
 ---
 """
-
         user_question = "Sobre que contenidos podes contestarme"
-
         messages = [
             SystemMessage(content=system_message),
             HumanMessage(content=user_question),
         ]
-
         ai_msg = self.llm.invoke(messages)
         self.temario = ai_msg.content
 
@@ -573,6 +632,33 @@ Proporciona una respuesta completa y didáctica.
         except Exception as e:
             print(f"❌ Error en flujo RAG: {e}")
             return f"Error al procesar la consulta: {str(e)}"
+
+    def inicializar_agent_card(self, host="localhost", port=10002):
+        """Inicializa el AgentCard y los skills del asistente"""
+        # Usar los imports locales si existen, si no, usar los de ADK
+        try:
+            from google.adk.agents.agent_card import AgentCard, AgentSkill, AgentCapabilities
+        except ImportError:
+            from models.agent import AgentCard, AgentSkill, AgentCapabilities
+        capabilities = AgentCapabilities(streaming=False)
+        skill = AgentSkill(
+            id="physics_rag",
+            name="Asistente de Física I",
+            description="Responde consultas de Física utilizando recuperación aumentada de información",
+            tags=["fisica", "rag", "pdf"],
+            examples=["Explicá el principio de conservación de la energía", "¿Qué es el centro de masa?"]
+        )
+        self.skills = [skill]
+        self.agent_card = AgentCard(
+            name="AsistenteFisica",
+            description="Agente que responde preguntas de física usando RAG",
+            url=f"http://{host}:{port}/",
+            version="1.0.0",
+            defaultInputModes=["text"],
+            defaultOutputModes=["text"],
+            capabilities=capabilities,
+            skills=self.skills
+        )
 
     # Clase interna para memoria semántica
     class SemanticMemory:
