@@ -97,7 +97,7 @@ class A2AClient:
                 response = await client.post(
                     self.url,
                     json=request.model_dump(),  # Convert Pydantic model to JSON
-                    timeout=30
+                    timeout=120  # Aumenta el timeout a 120 segundos
                 )
                 response.raise_for_status()     # Raise error if status code is 4xx/5xx
                 return response.json()          # Return parsed response as a dict

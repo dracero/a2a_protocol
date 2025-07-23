@@ -117,13 +117,13 @@ class OrchestratorAgent:
         - Available tool functions
         """
         return LlmAgent(
-            model="gemini-1.5-flash-latest",    # Specify Gemini model version
+            model="gemini-2.5-flash",    # Specify Gemini model version
             name="orchestrator_agent",          # Human identifier for this agent
             description="Delegates user queries to child A2A agents based on intent.",
             instruction=self._root_instruction,  # Function providing system prompt text
             tools=[
                 self._list_agents,               # Tool 1: list available child agents
-                self._delegate_task             # Tool 2: call a child agent
+                self.delegate_task             # Tool 2: call a child agent
             ],
         )
 
@@ -149,7 +149,7 @@ class OrchestratorAgent:
         """
         return list(self.connectors.keys())
 
-    async def _delegate_task(
+    async def delegate_task(
         self,
         agent_name: str,
         message: str,

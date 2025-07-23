@@ -67,7 +67,7 @@ class TellDateTimeTimezoneAgent:
             - Timezone
         """
         return LlmAgent(
-            model="gemini-1.5-flash-latest",
+            model="gemini-2.5-flash",
             name="tell_datetime_timezone_agent",
             description="Tells the current date, time, and timezone",
             instruction=(

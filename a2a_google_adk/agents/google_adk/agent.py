@@ -92,7 +92,7 @@ class TellDateTimeZoneAgent:
             LlmAgent: An agent object from Google's ADK
         """
         return LlmAgent(
-            model="gemini-1.5-flash-latest",                # Gemini model version
+            model="gemini-2.5-flash",                # Gemini model version
             name="tell_date_time_zone_agent",               # Name of the agent
             description="Tells the current date, time, and time zone",  # Description for metadata
             instruction="Reply with the current date, time, and time zone in the format YYYY-MM-DD HH:MM:SS TZ."  # System prompt

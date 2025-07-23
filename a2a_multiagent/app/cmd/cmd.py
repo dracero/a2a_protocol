@@ -140,14 +140,16 @@ async def send_message(request: SendMessageRequest):
     # Generate session ID if not provided
     session_id = request.session_id or uuid4().hex
     
-    # Construct the payload using the expected JSON-RPC task format
+    # Construir el payload SOLO con los campos de params, para TaskSendParams
     payload = {
-        "id": uuid4().hex,  # Generate a new unique task ID
+        "id": uuid4().hex,
         "sessionId": session_id,
         "message": {
             "role": "user",
             "parts": [{"type": "text", "text": request.message}]
-        }
+        },
+        "historyLength": None,
+        "metadata": None
     }
     
     try:
@@ -181,6 +183,9 @@ async def send_message(request: SendMessageRequest):
         return response
         
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR] send-message failed: {e}\nTraceback:\n{tb}")
         raise HTTPException(
             status_code=500,
             detail=f"Error while sending task to agent: {str(e)}"
