@@ -18,6 +18,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain.memory import ConversationSummaryBufferMemory
 from dotenv import load_dotenv
 from models.agent import AgentCard, AgentCapabilities, AgentSkill
+
 # Imports ADK
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.sessions import InMemorySessionService
@@ -39,6 +40,10 @@ class AsistenteFisica:
         # Configuración básica
         self.name = "asistente_fisica"
         self._setup_apis()
+        
+        # Estado de inicialización
+        self._components_initialized = False
+        self._is_running = False
         
         # Inicializar componentes
         self.llm = None
@@ -71,42 +76,63 @@ class AsistenteFisica:
 
     def inicializar_componentes(self):
         """Inicializar todos los componentes del asistente"""
-        self._inicializar_modelos()
-        self._inicializar_memoria()
-        self._inicializar_adk()
-        self._inicializar_modelo_embedding()
-        print("✅ Todos los componentes inicializados")
+        if self._components_initialized:
+            logger.info("⚠️ Componentes ya inicializados, saltando...")
+            return
+            
+        try:
+            self._inicializar_modelos()
+            self._inicializar_memoria()
+            self._inicializar_adk()
+            self._inicializar_modelo_embedding()
+            self._components_initialized = True
+            print("✅ Todos los componentes inicializados")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando componentes: {e}")
+            raise
 
     def _inicializar_modelos(self):
         """Inicializar los modelos de lenguaje"""
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=os.getenv("GOOGLE_API_KEY"),
-            temperature=0,
-            max_output_tokens=None,
-        )
-        print("✅ Modelos inicializados")
+        try:
+            self.llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=os.getenv("GOOGLE_API_KEY"),
+                temperature=0,
+                max_output_tokens=None,
+            )
+            print("✅ Modelos inicializados")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando modelos: {e}")
+            raise
 
     def _inicializar_memoria(self):
         """Inicializar la memoria semántica"""
-        self.memoria_semantica = self.SemanticMemory(llm=self.llm)
-        print("✅ Memoria semántica inicializada")
+        try:
+            self.memoria_semantica = self.SemanticMemory(llm=self.llm)
+            print("✅ Memoria semántica inicializada")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando memoria: {e}")
+            raise
 
     def _inicializar_adk(self):
         """Inicializar componentes ADK"""
-        # Crear agentes ANTES del Runner
-        self._crear_agentes()
+        try:
+            # Crear agentes ANTES del Runner
+            self._crear_agentes()
 
-        # Crear runner principal usando el patrón del segundo script
-        self.runner = Runner(
-            app_name=self.name,
-            agent=self._build_main_agent(),
-            session_service=InMemorySessionService(),
-            memory_service=InMemoryMemoryService(),
-            artifact_service=InMemoryArtifactService()
-        )
+            # Crear runner principal usando el patrón del segundo script
+            self.runner = Runner(
+                app_name=self.name,
+                agent=self._build_main_agent(),
+                session_service=InMemorySessionService(),
+                memory_service=InMemoryMemoryService(),
+                artifact_service=InMemoryArtifactService()
+            )
 
-        print("✅ Componentes ADK inicializados")
+            print("✅ Componentes ADK inicializados")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando ADK: {e}")
+            raise
 
     def _build_main_agent(self):
         """Construir agente principal para comunicación externa"""
@@ -130,137 +156,140 @@ Tu respuesta debe ser clara, didáctica y basada en la información de los docum
 
     def _crear_agentes(self):
         """Crear los agentes ADK especializados"""
-        # Agente Clasificador
-        self.classifier_agent = LlmAgent(
-            name="clasificador",
-            model="gemini-2.5-flash",
-            description="Clasifica consultas de física según el temario",
-            instruction="""Eres un agente especializado en clasificar consultas de física.
+        try:
+            # Agente Clasificador
+            self.classifier_agent = LlmAgent(
+                name="clasificador",
+                model="gemini-2.5-flash",
+                description="Clasifica consultas de física según el temario",
+                instruction="""Eres un agente especializado en clasificar consultas de física.
 Debes proporcionar tu respuesta en el siguiente formato:
 TEMA: [número y título]
 SUBTEMAS: [lista]
 KEYWORDS: [palabras clave]
 """
-        )
+            )
 
-        # Agente Buscador
-        self.search_agent = LlmAgent(
-            name="buscador",
-            model="gemini-2.5-flash",
-            description="Genera consultas de búsqueda optimizadas",
-            instruction="""Eres un agente de búsqueda especializado en física.
+            # Agente Buscador
+            self.search_agent = LlmAgent(
+                name="buscador",
+                model="gemini-2.5-flash",
+                description="Genera consultas de búsqueda optimizadas",
+                instruction="""Eres un agente de búsqueda especializado en física.
 Genera la mejor consulta de búsqueda posible para la información solicitada.
 Responde SOLAMENTE con la consulta de búsqueda optimizada."""
-        )
+            )
 
-        # Agente de Respuesta
-        self.response_agent = LlmAgent(
-            name="respondedor",
-            model="gemini-2.5-flash",
-            description="Profesor experto que da explicaciones claras",
-            instruction="""Eres un profesor experto en física que proporciona explicaciones claras y didácticas.
+            # Agente de Respuesta
+            self.response_agent = LlmAgent(
+                name="respondedor",
+                model="gemini-2.5-flash",
+                description="Profesor experto que da explicaciones claras",
+                instruction="""Eres un profesor experto en física que proporciona explicaciones claras y didácticas.
 Usa principalmente los fragmentos de documentos relevantes para construir tu respuesta.
 Estructura tu respuesta de manera clara, usando ecuaciones cuando sea apropiado.
 IMPORTANTE: Actúa como un profesor experto con pleno conocimiento."""
-        )
+            )
 
-        self.agents = {
-            'classifier': self.classifier_agent,
-            'search': self.search_agent,
-            'response': self.response_agent
-        }
-        print("✅ Agentes ADK creados correctamente")
+            self.agents = {
+                'classifier': self.classifier_agent,
+                'search': self.search_agent,
+                'response': self.response_agent
+            }
+            print("✅ Agentes ADK creados correctamente")
+        except Exception as e:
+            logger.error(f"❌ Error creando agentes ADK: {e}")
+            raise
 
     def _inicializar_modelo_embedding(self):
         """Inicializar el modelo de embeddings"""
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModel.from_pretrained(self.model_name).to(device)
-        print("✅ Modelo de embeddings inicializado")
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModel.from_pretrained(self.model_name).to(device)
+            print("✅ Modelo de embeddings inicializado")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando modelo de embeddings: {e}")
+            raise
 
     # Método de comunicación principal - Compatible con el segundo script
     async def invoke(self, query: str, session_id: str = "default_session") -> str:
-        """Método de comunicación principal con debug mejorado"""
+        """Método de comunicación principal simplificado y robusto"""
         logger.info(f"🔍 Invoke llamado con query: {query[:100]}... session_id: {session_id}")
         
         try:
-            # Verificar inicialización del runner
-            if self.runner is None:
-                logger.warning("⚠️ Runner no inicializado, inicializando componentes...")
+            # Verificar inicialización
+            if not self._components_initialized:
+                logger.warning("⚠️ Componentes no inicializados, inicializando...")
                 self.inicializar_componentes()
-                if self.runner is None:
-                    raise Exception("No se pudo inicializar el runner")
             
-            logger.info("✅ Runner disponible, creando/obteniendo sesión...")
+            # Si hay problemas con ADK/Runner, usar flujo RAG directo
+            if self.runner is None or not self._is_running:
+                logger.info("📋 Usando flujo RAG directo...")
+                return await self.iniciar_flujo_rag(query, session_id)
             
-            # Obtener o crear sesión
-            session = await self.runner.session_service.get_session(
-                app_name=self.name,
-                user_id="fisica_user",
-                session_id=session_id,
-            )
-            
-            if session is None:
-                logger.info("📝 Creando nueva sesión...")
-                session = await self.runner.session_service.create_session(
+            # Intentar usar runner ADK
+            try:
+                logger.info("🚀 Intentando usar runner ADK...")
+                
+                # Obtener o crear sesión
+                session = await self.runner.session_service.get_session(
                     app_name=self.name,
                     user_id="fisica_user",
                     session_id=session_id,
-                    state={},
                 )
-            
-            logger.info("✅ Sesión obtenida/creada, procesando con RAG...")
-            
-            # Procesar con RAG
-            respuesta_rag = await self.iniciar_flujo_rag(query, user_id="fisica_user")
-            logger.info(f"✅ RAG procesado: {respuesta_rag[:100]}...")
-            
-            # Crear mensaje para el runner
-            message = types.Content(
-                role="user", 
-                parts=[types.Part(text=f"Consulta: {query}\n\nRespuesta procesada: {respuesta_rag}")]
-            )
-            
-            logger.info("🚀 Ejecutando runner...")
-            
-            # Ejecutar runner
-            respuesta = None
-            event_count = 0
-            
-            async for event in self.runner.run_async(
-                user_id="fisica_user",
-                session_id=session_id,
-                new_message=message
-            ):
-                event_count += 1
-                logger.info(f"📨 Evento {event_count} recibido del runner")
                 
-                if event and event.content and event.content.parts:
-                    texto = "\n".join([p.text for p in event.content.parts if p.text])
-                    if texto:
-                        respuesta = texto
-                        logger.info(f"✅ Respuesta del runner: {respuesta[:100]}...")
+                if session is None:
+                    logger.info("📝 Creando nueva sesión...")
+                    session = await self.runner.session_service.create_session(
+                        app_name=self.name,
+                        user_id="fisica_user",
+                        session_id=session_id,
+                        state={},
+                    )
+                
+                # Procesar con RAG primero
+                respuesta_rag = await self.iniciar_flujo_rag(query, user_id="fisica_user")
+                
+                # Crear mensaje para el runner
+                message = types.Content(
+                    role="user", 
+                    parts=[types.Part(text=f"Consulta: {query}\n\nRespuesta procesada: {respuesta_rag}")]
+                )
+                
+                # Ejecutar runner con timeout
+                respuesta = None
+                event_count = 0
+                max_events = 5  # Limitar eventos para evitar bucles infinitos
+                
+                async for event in self.runner.run_async(
+                    user_id="fisica_user",
+                    session_id=session_id,
+                    new_message=message
+                ):
+                    event_count += 1
+                    if event_count > max_events:
+                        logger.warning("⚠️ Máximo de eventos alcanzado, usando respuesta RAG")
                         break
-            
-            # Retornar respuesta
-            if respuesta:
-                logger.info("✅ Retornando respuesta del runner")
-                return respuesta
-            else:
-                logger.info("⚠️ No se obtuvo respuesta del runner, retornando RAG")
-                return respuesta_rag
+                        
+                    if event and event.content and event.content.parts:
+                        texto = "\n".join([p.text for p in event.content.parts if p.text])
+                        if texto:
+                            respuesta = texto
+                            break
+                
+                return respuesta if respuesta else respuesta_rag
+                
+            except Exception as runner_error:
+                logger.warning(f"⚠️ Error con runner ADK, usando RAG directo: {runner_error}")
+                return await self.iniciar_flujo_rag(query, session_id)
                 
         except Exception as e:
             logger.error(f"❌ Error en invoke: {e}")
-            logger.error(f"❌ Tipo de error: {type(e)}")
-            import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             
-            # Fallback: intentar respuesta directa sin runner
+            # Fallback final: respuesta simple con LLM
             try:
-                logger.info("🔄 Intentando fallback sin runner...")
-                if hasattr(self, 'llm') and self.llm:
-                    from langchain.schema import HumanMessage, SystemMessage
+                if self.llm:
                     messages = [
                         SystemMessage(content="Eres un experto en física. Responde de manera clara y didáctica."),
                         HumanMessage(content=query)
@@ -268,61 +297,68 @@ IMPORTANTE: Actúa como un profesor experto con pleno conocimiento."""
                     response = self.llm(messages)
                     return response.content
                 else:
-                    return f"Error: El agente no está correctamente configurado. {str(e)}"
+                    return f"Error: No se pudo procesar la consulta. {str(e)}"
             except Exception as fallback_error:
-                logger.error(f"❌ Error en fallback: {fallback_error}")
-                return f"Error procesando la consulta: {str(e)}"
+                logger.error(f"❌ Error en fallback final: {fallback_error}")
+                return f"Error crítico procesando la consulta: {str(e)}"
 
-    # Métodos RAG del primer script
+    # Métodos RAG simplificados
     def leer_pdf(self, nombre_archivo):
         """Leer contenido de un archivo PDF"""
         try:
             reader = PdfReader(nombre_archivo)
             return "".join(page.extract_text() for page in reader.pages)
         except Exception as e:
-            print(f"Error al leer {nombre_archivo}: {e}")
+            logger.error(f"Error al leer {nombre_archivo}: {e}")
             return ""
 
     def get_pdf_files(self):
         """Obtiene la lista de archivos PDF desde el directorio especificado en la variable de entorno PDF_DIR"""
         pdf_dir = os.getenv("PDF_DIR")
         if not pdf_dir or not os.path.isdir(pdf_dir):
-            print(f"⚠️ El directorio PDF_DIR no está definido o no existe: {pdf_dir}")
+            logger.warning(f"⚠️ El directorio PDF_DIR no está definido o no existe: {pdf_dir}")
             return []
         return [os.path.join(pdf_dir, f) for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
 
     def procesar_pdfs_temario(self, archivos_pdf=None):
-        """Procesar PDFs para extraer el temario. Si archivos_pdf es None, usa los PDFs del directorio PDF_DIR"""
-        if archivos_pdf is None:
-            archivos_pdf = self.get_pdf_files()
-        contenido_completo = ""
+        """Procesar PDFs para extraer el temario"""
+        try:
+            if archivos_pdf is None:
+                archivos_pdf = self.get_pdf_files()
+            
+            contenido_completo = ""
+            for archivo in archivos_pdf:
+                if os.path.exists(archivo):
+                    contenido_completo += f"\n--- Contenido de {archivo} ---\n"
+                    contenido_completo += self.leer_pdf(archivo)
 
-        for archivo in archivos_pdf:
-            if os.path.exists(archivo):
-                contenido_completo += f"\n--- Contenido de {archivo} ---\n"
-                contenido_completo += self.leer_pdf(archivo)
+            self.contenido_completo = contenido_completo
 
-        self.contenido_completo = contenido_completo
+            if not contenido_completo.strip():
+                logger.warning("⚠️ No se pudo extraer contenido de los PDFs")
+                self.temario = "Temario no disponible - PDFs no procesados"
+                return self.temario
 
-        # Extraer temario usando LLM
-        system_message = f"""
+            # Extraer temario usando LLM
+            system_message = f"""
 Eres un experto profesor Física I de la Universidad de Buenos Aires.
 Utiliza el siguiente contenido como referencia:
 ---
 {self.contenido_completo}
 ---
 """
-        user_question = "Sobre que contenidos podes contestarme"
-        messages = [
-            SystemMessage(content=system_message),
-            HumanMessage(content=user_question),
-        ]
-        ai_msg = self.llm.invoke(messages)
-        self.temario = ai_msg.content
+            user_question = "Sobre que contenidos podes contestarme"
+            messages = [
+                SystemMessage(content=system_message),
+                HumanMessage(content=user_question),
+            ]
+            
+            ai_msg = self.llm.invoke(messages)
+            self.temario = ai_msg.content
 
-        # Actualizar el agente principal con el temario
-        if hasattr(self, 'runner') and self.runner.agent:
-            self.runner.agent.instruction = f"""Eres un asistente experto en Física que utiliza un sistema RAG avanzado.
+            # Actualizar el agente principal con el temario
+            if hasattr(self, 'runner') and self.runner and self.runner.agent:
+                self.runner.agent.instruction = f"""Eres un asistente experto en Física que utiliza un sistema RAG avanzado.
 
 TEMARIO DISPONIBLE:
 {self.temario}
@@ -330,8 +366,13 @@ TEMARIO DISPONIBLE:
 Responde consultas de física de manera clara y didáctica, utilizando la información de los documentos.
 """
 
-        print("✅ Temario extraído correctamente")
-        return self.temario
+            print("✅ Temario extraído correctamente")
+            return self.temario
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando PDFs para temario: {e}")
+            self.temario = f"Error procesando temario: {str(e)}"
+            return self.temario
 
     def split_into_chunks(self, text, chunk_size=2000):
         """Dividir texto en chunks"""
@@ -339,93 +380,109 @@ Responde consultas de física de manera clara y didáctica, utilizando la inform
 
     def generate_embeddings(self, chunks, batch_size=32):
         """Generar embeddings para los chunks"""
-        embeddings = []
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i+batch_size]
-            inputs = self.tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512
-            ).to(self.model.device)
+        try:
+            embeddings = []
+            for i in range(0, len(chunks), batch_size):
+                batch = chunks[i:i+batch_size]
+                inputs = self.tokenizer(
+                    batch,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=512
+                ).to(self.model.device)
 
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-            embeddings.extend(outputs.last_hidden_state[:, 0, :].cpu().numpy())
-        return embeddings
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                embeddings.extend(outputs.last_hidden_state[:, 0, :].cpu().numpy())
+            return embeddings
+        except Exception as e:
+            logger.error(f"❌ Error generando embeddings: {e}")
+            return []
 
     async def store_in_qdrant(self, points):
         """Almacenar puntos en Qdrant"""
-        client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
-
         try:
-            await client.get_collection(self.collection_name)
-        except Exception:
-            await client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=len(points[0].vector), distance=Distance.COSINE)
-            )
-            print(f"Colección '{self.collection_name}' creada")
+            client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
 
-        await client.upsert(collection_name=self.collection_name, points=points, wait=True)
-        print(f"{len(points)} chunks almacenados en Qdrant")
+            try:
+                await client.get_collection(self.collection_name)
+            except Exception:
+                await client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=len(points[0].vector), distance=Distance.COSINE)
+                )
+                print(f"Colección '{self.collection_name}' creada")
+
+            await client.upsert(collection_name=self.collection_name, points=points, wait=True)
+            print(f"{len(points)} chunks almacenados en Qdrant")
+        except Exception as e:
+            logger.error(f"❌ Error almacenando en Qdrant: {e}")
+            raise
 
     async def procesar_y_almacenar_pdfs(self, pdf_files):
         """Procesar PDFs y almacenar en Qdrant"""
-        all_chunks = []
-        pdf_metadata = []
-        global_id_counter = 0
+        try:
+            all_chunks = []
+            pdf_metadata = []
+            global_id_counter = 0
 
-        for pdf_file in pdf_files:
-            if not os.path.exists(pdf_file):
-                print(f"⚠️ {pdf_file} no encontrado")
-                continue
+            for pdf_file in pdf_files:
+                if not os.path.exists(pdf_file):
+                    logger.warning(f"⚠️ {pdf_file} no encontrado")
+                    continue
 
-            text = self.leer_pdf(pdf_file)
-            if text:
-                chunks = self.split_into_chunks(text)
+                text = self.leer_pdf(pdf_file)
+                if text:
+                    chunks = self.split_into_chunks(text)
 
-                for i, chunk in enumerate(chunks):
-                    all_chunks.append(chunk)
-                    pdf_metadata.append({
-                        "pdf_name": pdf_file,
-                        "chunk_id": i,
-                        "global_id": global_id_counter
-                    })
-                    global_id_counter += 1
+                    for i, chunk in enumerate(chunks):
+                        all_chunks.append(chunk)
+                        pdf_metadata.append({
+                            "pdf_name": pdf_file,
+                            "chunk_id": i,
+                            "global_id": global_id_counter
+                        })
+                        global_id_counter += 1
 
-        if not all_chunks:
-            print("⚠️ No se encontraron chunks para procesar")
-            return
+            if not all_chunks:
+                logger.warning("⚠️ No se encontraron chunks para procesar")
+                return
 
-        embeddings = self.generate_embeddings(all_chunks)
+            embeddings = self.generate_embeddings(all_chunks)
+            if not embeddings:
+                logger.error("❌ No se pudieron generar embeddings")
+                return
 
-        points = [
-            PointStruct(
-                id=meta["global_id"],
-                vector=embedding.tolist(),
-                payload={
-                    "pdf_name": meta["pdf_name"],
-                    "chunk_id": meta["chunk_id"],
-                    "text": all_chunks[idx]
-                }
-            )
-            for idx, (meta, embedding) in enumerate(zip(pdf_metadata, embeddings))
-        ]
+            points = [
+                PointStruct(
+                    id=meta["global_id"],
+                    vector=embedding.tolist(),
+                    payload={
+                        "pdf_name": meta["pdf_name"],
+                        "chunk_id": meta["chunk_id"],
+                        "text": all_chunks[idx]
+                    }
+                )
+                for idx, (meta, embedding) in enumerate(zip(pdf_metadata, embeddings))
+            ]
 
-        await self.store_in_qdrant(points)
+            await self.store_in_qdrant(points)
 
-        metadata_dict = {
-            p.id: {
-                "pdf": p.payload["pdf_name"],
-                "chunk": p.payload["text"]
-            } for p in points
-        }
+            metadata_dict = {
+                p.id: {
+                    "pdf": p.payload["pdf_name"],
+                    "chunk": p.payload["text"]
+                } for p in points
+            }
 
-        with open("pdf_metadata.json", "w", encoding="utf-8") as f:
-            json.dump(metadata_dict, f, ensure_ascii=False, indent=4)
-        print("✅ Metadatos guardados en 'pdf_metadata.json'")
+            with open("pdf_metadata.json", "w", encoding="utf-8") as f:
+                json.dump(metadata_dict, f, ensure_ascii=False, indent=4)
+            print("✅ Metadatos guardados en 'pdf_metadata.json'")
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando y almacenando PDFs: {e}")
+            raise
 
     async def search_documents(self, query, top_k=5):
         """Realizar búsqueda en Qdrant"""
@@ -434,9 +491,9 @@ Responde consultas de física de manera clara y didáctica, utilizando la inform
 
             try:
                 await client.get_collection(self.collection_name)
-                print("✅ Conexión a Qdrant exitosa")
+                logger.info("✅ Conexión a Qdrant exitosa")
             except Exception as e:
-                print(f"❌ Error al conectar con Qdrant: {str(e)}")
+                logger.warning(f"⚠️ Error al conectar con Qdrant: {str(e)}")
                 return []
 
             inputs = self.tokenizer(
@@ -479,186 +536,129 @@ Responde consultas de física de manera clara y didáctica, utilizando la inform
             return formatted_results
 
         except Exception as e:
-            print(f"❌ Error en la búsqueda: {str(e)}")
+            logger.error(f"❌ Error en la búsqueda: {str(e)}")
             return []
 
-    async def _get_agent_response(self, agent, input_data, session_id="default_session"):
-        """Función auxiliar para obtener respuesta de un agente ADK"""
+    async def _get_agent_response_simple(self, instruction: str, query: str) -> str:
+        """Método simplificado para obtener respuestas de agentes usando LLM directo"""
         try:
-            if isinstance(input_data, dict):
-                prompt = self._format_prompt_for_agent(agent.name, input_data)
-            else:
-                prompt = str(input_data)
-
-            # Crear runner temporal para este agente
-            temp_runner = Runner(
-                app_name=f"temp_{agent.name}",
-                agent=agent,
-                session_service=InMemorySessionService(),
-                memory_service=InMemoryMemoryService(),
-                artifact_service=InMemoryArtifactService()
-            )
-
-            session = await temp_runner.session_service.get_session(
-                app_name=f"temp_{agent.name}",
-                user_id="fisica_user",
-                session_id=session_id,
-            )
-            if session is None:
-                session = await temp_runner.session_service.create_session(
-                    app_name=f"temp_{agent.name}",
-                    user_id="fisica_user",
-                    session_id=session_id,
-                    state={},
-                )
-
-            message = types.Content(role="user", parts=[types.Part(text=prompt)])
-            
-            last_event = None
-            async for event in temp_runner.run_async(
-                user_id="fisica_user",
-                session_id=session_id,
-                new_message=message
-            ):
-                last_event = event
-
-            if last_event and last_event.content and last_event.content.parts:
-                return "\n".join([p.text for p in last_event.content.parts if p.text])
-            
-            return "No se pudo obtener respuesta del agente"
-
+            messages = [
+                SystemMessage(content=instruction),
+                HumanMessage(content=query)
+            ]
+            response = self.llm(messages)
+            return response.content
         except Exception as e:
-            print(f"Error ejecutando agente {agent.name}: {e}")
-            # Fallback usando LLM directo
-            try:
-                messages = [
-                    SystemMessage(content=getattr(agent, 'instruction', 'You are a helpful AI assistant.')),
-                    HumanMessage(content=prompt)
-                ]
-                response = self.llm(messages)
-                return response.content
-            except Exception as fallback_error:
-                print(f"Error en fallback para agente {agent.name}: {fallback_error}")
-                return "Error al procesar la consulta"
-
-    def _format_prompt_for_agent(self, agent_name, data):
-        """Formatear el prompt según el agente específico"""
-        if agent_name == "clasificador":
-            return f"""
-TEMARIO DE FÍSICA:
-{data.get('temario', '')}
-
-CONTEXTO DE CONVERSACIÓN PREVIA:
-{data.get('contexto_memoria', '')}
-
-CONSULTA DEL USUARIO:
-{data.get('consulta_usuario', '')}
-
-Clasifica esta consulta según el temario proporcionado.
-"""
-        elif agent_name == "buscador":
-            return f"""
-CLASIFICACIÓN:
-{data.get('clasificacion', '')}
-
-CONSULTA ORIGINAL:
-{data.get('consulta_original', '')}
-
-Genera la mejor consulta de búsqueda para esta información.
-"""
-        elif agent_name == "respondedor":
-            return f"""
-**CONSULTA ORIGINAL DEL USUARIO:**
-{data.get('consulta_usuario', '')}
-
-**CONTEXTO DE CONVERSACIÓN ANTERIOR:**
-{data.get('contexto_memoria', '')}
-
-**CLASIFICACIÓN TEMÁTICA:**
-{data.get('clasificacion', '')}
-
-**FRAGMENTOS DE DOCUMENTOS RELEVANTES:**
-{data.get('contexto_documentos', '')}
-
-Proporciona una respuesta completa y didáctica.
-"""
-        return str(data)
+            logger.error(f"❌ Error obteniendo respuesta simple: {e}")
+            return f"Error: {str(e)}"
 
     async def iniciar_flujo_rag(self, consulta_usuario: str, user_id: str = "default_user"):
-        """Flujo completo de procesamiento RAG"""
-        print(f"📝 Consulta recibida: {consulta_usuario}")
-        contexto_memoria = self.memoria_semantica.get_context()
-
+        """Flujo simplificado de procesamiento RAG"""
+        logger.info(f"📝 Iniciando flujo RAG para: {consulta_usuario[:100]}...")
+        
         try:
-            # Paso 1: Clasificación
-            clasificacion_data = {
-                "consulta_usuario": consulta_usuario,
-                "contexto_memoria": contexto_memoria,
-                "temario": self.temario
-            }
-            clasificacion = await self._get_agent_response(self.classifier_agent, clasificacion_data)
+            # Obtener contexto de memoria
+            contexto_memoria = ""
+            if self.memoria_semantica:
+                contexto_memoria = self.memoria_semantica.get_context()
+
+            # Paso 1: Clasificación simplificada
+            clasificacion_instruction = f"""Eres un agente especializado en clasificar consultas de física.
+TEMARIO DISPONIBLE: {self.temario}
+Clasifica la siguiente consulta según el temario."""
+            
+            clasificacion = await self._get_agent_response_simple(
+                clasificacion_instruction, 
+                f"Consulta: {consulta_usuario}\nContexto: {contexto_memoria}"
+            )
 
             # Paso 2: Generar consulta de búsqueda
-            search_data = {
-                "clasificacion": clasificacion,
-                "consulta_original": consulta_usuario,
-                "contexto_conversacion": contexto_memoria
-            }
-            consulta_busqueda = await self._get_agent_response(self.search_agent, search_data)
+            search_instruction = """Eres un agente de búsqueda especializado en física.
+Genera la mejor consulta de búsqueda posible para la información solicitada.
+Responde SOLAMENTE con la consulta de búsqueda optimizada."""
+            
+            consulta_busqueda = await self._get_agent_response_simple(
+                search_instruction,
+                f"Clasificación: {clasificacion}\nConsulta original: {consulta_usuario}"
+            )
 
             # Paso 3: Búsqueda en Qdrant
-            resultados_busqueda = await self.search_documents(consulta_busqueda)
+            resultados_busqueda = await self.search_documents(consulta_busqueda.strip())
 
             # Paso 4: Generar respuesta final
-            contexto_busqueda = "\n".join([
-                f"--- Fragmento {i} (PDF: {res['pdf']}) ---\n{res['texto']}"
-                for i, res in enumerate(resultados_busqueda, 1)
-            ])
+            contexto_busqueda = ""
+            if resultados_busqueda:
+                contexto_busqueda = "\n".join([
+                    f"--- Fragmento {i} (PDF: {res['pdf']}) ---\n{res['texto']}"
+                    for i, res in enumerate(resultados_busqueda, 1)
+                ])
 
-            response_data = {
-                "consulta_usuario": consulta_usuario,
-                "contexto_memoria": contexto_memoria,
-                "clasificacion": clasificacion,
-                "contexto_documentos": contexto_busqueda
-            }
+            response_instruction = """Eres un profesor experto en física que proporciona explicaciones claras y didácticas.
+Usa principalmente los fragmentos de documentos relevantes para construir tu respuesta.
+Estructura tu respuesta de manera clara, usando ecuaciones cuando sea apropiado."""
 
-            respuesta_final = await self._get_agent_response(self.response_agent, response_data)
+            response_query = f"""CONSULTA ORIGINAL: {consulta_usuario}
+
+CONTEXTO DE CONVERSACIÓN: {contexto_memoria}
+
+CLASIFICACIÓN: {clasificacion}
+
+FRAGMENTOS DE DOCUMENTOS RELEVANTES:
+{contexto_busqueda}
+
+Proporciona una respuesta completa y didáctica."""
+
+            respuesta_final = await self._get_agent_response_simple(response_instruction, response_query)
             
-            # Actualizar memoria
-            self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
+            # Actualizar memoria si está disponible
+            if self.memoria_semantica:
+                try:
+                    self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error actualizando memoria: {e}")
             
+            logger.info("✅ Flujo RAG completado exitosamente")
             return respuesta_final
 
         except Exception as e:
-            print(f"❌ Error en flujo RAG: {e}")
-            return f"Error al procesar la consulta: {str(e)}"
+            logger.error(f"❌ Error en flujo RAG: {e}")
+            # Fallback: respuesta simple sin RAG
+            try:
+                fallback_instruction = f"""Eres un experto en física. 
+TEMARIO DISPONIBLE: {self.temario}
+Responde de manera clara y didáctica."""
+                
+                return await self._get_agent_response_simple(fallback_instruction, consulta_usuario)
+            except Exception as fallback_error:
+                logger.error(f"❌ Error en fallback RAG: {fallback_error}")
+                return f"Error procesando la consulta: {str(e)}"
 
     def inicializar_agent_card(self, host="localhost", port=10002):
         """Inicializa el AgentCard y los skills del asistente"""
-        # Usar los imports locales si existen, si no, usar los de ADK
         try:
-            from google.adk.agents.agent_card import AgentCard, AgentSkill, AgentCapabilities
-        except ImportError:
-            from models.agent import AgentCard, AgentSkill, AgentCapabilities
-        capabilities = AgentCapabilities(streaming=False)
-        skill = AgentSkill(
-            id="physics_rag",
-            name="Asistente de Física I",
-            description="Responde consultas de Física utilizando recuperación aumentada de información",
-            tags=["fisica", "rag", "pdf"],
-            examples=["Explicá el principio de conservación de la energía", "¿Qué es el centro de masa?"]
-        )
-        self.skills = [skill]
-        self.agent_card = AgentCard(
-            name="AsistenteFisica",
-            description="Agente que responde preguntas de física usando RAG",
-            url=f"http://{host}:{port}/",
-            version="1.0.0",
-            defaultInputModes=["text"],
-            defaultOutputModes=["text"],
-            capabilities=capabilities,
-            skills=self.skills
-        )
+            capabilities = AgentCapabilities(streaming=False)
+            skill = AgentSkill(
+                id="physics_rag",
+                name="Asistente de Física I",
+                description="Responde consultas de Física utilizando recuperación aumentada de información",
+                tags=["fisica", "rag", "pdf"],
+                examples=["Explicá el principio de conservación de la energía", "¿Qué es el centro de masa?"]
+            )
+            self.skills = [skill]
+            self.agent_card = AgentCard(
+                name="AsistenteFisica",
+                description="Agente que responde preguntas de física usando RAG",
+                url=f"http://{host}:{port}/",
+                version="1.0.0",
+                defaultInputModes=["text"],
+                defaultOutputModes=["text"],
+                capabilities=capabilities,
+                skills=self.skills
+            )
+            logger.info("✅ AgentCard inicializado correctamente")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando AgentCard: {e}")
+            raise
 
     # Clase interna para memoria semántica
     class SemanticMemory:
@@ -675,19 +675,22 @@ Proporciona una respuesta completa y didáctica.
 
         def add_interaction(self, query, response):
             """Añadir interacción a la memoria"""
-            self.memory.save_context({"input": query}, {"output": response})
-            self.conversations.append({"query": query, "response": response})
-            if len(self.conversations) > self.max_entries:
-                self.conversations.pop(0)
+            try:
+                self.memory.save_context({"input": query}, {"output": response})
+                self.conversations.append({"query": query, "response": response})
+                if len(self.conversations) > self.max_entries:
+                    self.conversations.pop(0)
 
-            self.direct_history += f"\nUsuario: {query}\nAsistente: {response}\n"
-            if len(self.conversations) > 3:
-                recent = self.conversations[-3:]
-                self.direct_history = ""
-                for conv in recent:
-                    self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
+                self.direct_history += f"\nUsuario: {query}\nAsistente: {response}\n"
+                if len(self.conversations) > 3:
+                    recent = self.conversations[-3:]
+                    self.direct_history = ""
+                    for conv in recent:
+                        self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
 
-            self.update_summary()
+                self.update_summary()
+            except Exception as e:
+                logger.error(f"Error añadiendo interacción a memoria: {e}")
 
         def update_summary(self):
             """Actualizar resumen de la conversación"""
@@ -701,83 +704,9 @@ Proporciona una respuesta completa y didáctica.
                 else:
                     self.summary = f"Interacciones recientes:{self.direct_history}"
             except Exception as e:
-                print(f"Error al actualizar resumen: {e}")
+                logger.error(f"Error actualizando resumen: {e}")
                 self.summary = f"Interacciones recientes:{self.direct_history}"
 
         def get_context(self):
             """Obtener contexto actual de la conversación"""
             return self.summary if self.summary.strip() else "No hay conversación previa."
-
-
-# Función principal para inicialización
-async def main_pc():
-    """Función principal robusta para inicialización y consulta"""
-    asistente = AsistenteFisica()
-    asistente.inicializar_componentes()
-
-    # Leer PDFs desde PDF_DIR si no se especifican
-    archivos_pdf = asistente.get_pdf_files()
-    if not archivos_pdf:
-        print("⚠️ No se encontraron archivos PDF en el directorio PDF_DIR")
-        return None
-
-    print(f"Procesando {len(archivos_pdf)} archivos PDF...")
-    inicio_temario = time.time()
-    temario = asistente.procesar_pdfs_temario(archivos_pdf)
-    tiempo_temario = time.time() - inicio_temario
-    print("\nTemario extraído:")
-    print("-" * 80)
-    print(temario)
-    print("-" * 80)
-    print(f"✅ Temario extraído en {tiempo_temario:.2f}s\n")
-
-    inicio_chunks = time.time()
-    await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
-    tiempo_chunks = time.time() - inicio_chunks
-    print(f"✅ PDFs procesados y almacenados en Qdrant en {tiempo_chunks:.2f}s\n")
-
-    # Consulta de ejemplo
-    consulta = input("\nIngresa tu consulta de física: ")
-    inicio_consulta = time.time()
-    respuesta = await asistente.invoke(consulta, session_id="sesion_1")
-    tiempo_consulta = time.time() - inicio_consulta
-
-    print("\n📣 RESPUESTA FINAL:")
-    print("-" * 80)
-    print(respuesta)
-    print("-" * 80)
-    print(f"✅ Respuesta generada en {tiempo_consulta:.2f}s\n")
-
-    # Guardar trayectoria de la consulta
-    trayectoria = {
-        "consulta": consulta,
-        "temario": temario,
-        "respuesta": respuesta,
-        "tiempos": {
-            "temario": tiempo_temario,
-            "chunks": tiempo_chunks,
-            "consulta": tiempo_consulta
-        }
-    }
-    with open("trayectoria_adk.json", "w", encoding="utf-8") as f:
-        json.dump(trayectoria, f, indent=4, ensure_ascii=False)
-    print("✅ Trayectoria guardada en 'trayectoria_adk.json'")
-
-    return asistente
-
-# Ejemplo de uso
-"""
-import asyncio
-
-# Inicializar el asistente
-asistente = await main_pc()
-
-# Usar el método invoke para comunicación (compatible con el segundo script)
-if asistente:
-    respuesta = await asistente.invoke("¿Qué es el efecto Doppler?", session_id="sesion_1")
-    print(f"Respuesta: {respuesta}")
-    
-    # También puedes usar múltiples sesiones
-    respuesta2 = await asistente.invoke("Explícame las ondas electromagnéticas", session_id="sesion_2")
-    print(f"Respuesta 2: {respuesta2}")
-"""
