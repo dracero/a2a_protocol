@@ -2,7 +2,7 @@ import logging
 import click
 from server.server import A2AServer
 from models.agent import AgentCard, AgentCapabilities, AgentSkill
-from agents.asistente_fisica.agent import AgenteFisica
+from agents.asistente_fisica.agent import AsistenteFisica
 from agents.asistente_fisica.task_manager import FisicaTaskManager
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +33,7 @@ def main(host: str, port: int):
         skills=[skill]
     )
 
-    agente = AgenteFisica()
+    agente = AsistenteFisica()
     task_manager = FisicaTaskManager(agent=agente)
     server = A2AServer(host=host, port=port, agent_card=agent_card, task_manager=task_manager)
     server.start()
