@@ -9,5 +9,5 @@ wheels/
 
 # Virtual environments
 .venv
-
+/media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/pythonAI-Others/a2a_protocol/a2a_multiagent/.env
 .env
