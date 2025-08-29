@@ -104,14 +104,21 @@ Para iniciar los agentes y el orquestador, sigue estos pasos:
      --host localhost --port 10003
    ```
 
-4. **Iniciar el orquestador (agente host)**:
+4. **Iniciar el agente generador de imagenes**:
 
    ```bash
-   uv run -m agents.host_agent.entry \
-     --host localhost --port 10002
+    uv run -m agents.image_generation \
+      --host localhost --port 10004
+
+
+5. **Iniciar el orquestador (agente host)**:
+
+   ```bash
+      uv run -m agents.host_agent.entry \
+        --host localhost --port 10002
    ```
 
-5. **Lanzar la CLI (cmd.py)**:
+6. **Lanzar la CLI (cmd.py)**:
 
    ```bash
    uv run -m app.cmd.cmd --agent http://localhost:10002
