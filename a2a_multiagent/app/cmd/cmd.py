@@ -2,19 +2,7 @@
 # Purpose:
 # This file is a FastAPI backend that exposes the ImageGeneratorAgent
 # functionality as HTTP endpoints with image viewing capabilities.
-#
-# It provides REST API endpoints to:
-# - Send messages to the agent
-# - Retrieve conversation history
-# - Manage sessions
-# - View and manage generated images
-#
-# This version supports:
-# - FastAPI web framework
-# - Session management via HTTP
-# - JSON request/response format
-# - Image viewing and management
-# - HTML interfaces for image display
+# FIXED: Properly serves images using file paths instead of artifacts
 # =============================================================================
 import asyncio
 import argparse
@@ -23,15 +11,23 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, HTMLResponse
+from fastapi.responses import Response, HTMLResponse, FileResponse
 from pydantic import BaseModel
 import uvicorn
 import base64
 import json
+import os
+import logging
+
 # Import the A2AClient from your client module
 from client.client import A2AClient
 # Import the Task model
 from models.task import Task
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # =============================================================================
 # Pydantic Models for Request/Response
 # =============================================================================
@@ -39,33 +35,55 @@ class SendMessageRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     include_history: bool = False
+
 class MessageResponse(BaseModel):
     task_id: str
     session_id: str
     agent_response: str
     history: Optional[List[dict]] = None
+
 class SessionHistoryResponse(BaseModel):
     session_id: str
     history: List[dict]
+
 class HealthResponse(BaseModel):
     status: str
     agent_url: str
-class ImageListResponse(BaseModel):
-    session_id: str
-    total_images: int
-    images: List[dict]
-class ImageDataResponse(BaseModel):
-    id: str
-    name: str
-    mime_type: str
-    has_data: bool
-    session_id: str
+
 # =============================================================================
 # Global Variables
 # =============================================================================
 # Global client instance - will be initialized when the app starts
 client: Optional[A2AClient] = None
-agent_url: str = "http://localhost:10003"  # Cambiado al puerto del agente de imágenes
+agent_url: str = "http://localhost:10004"  # Puerto del agente de imágenes
+IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", os.path.dirname(os.path.abspath(__file__)))
+
+# =============================================================================
+# Image Cache Integration (debe ser la misma que usa el agente)
+# =============================================================================
+class ImageData:
+    def __init__(self, id=None, name=None, mime_type=None, file_path=None, error=None):
+        self.id = id
+        self.name = name
+        self.mime_type = mime_type
+        self.file_path = file_path
+        self.error = error
+
+class InMemoryImageCache:
+    def __init__(self):
+        self._cache = {}
+    
+    def get(self, session_id: str):
+        return self._cache.get(session_id)
+    
+    def add_image(self, session_id: str, image_data: ImageData):
+        if session_id not in self._cache:
+            self._cache[session_id] = {}
+        self._cache[session_id][image_data.id] = image_data
+
+# Global cache instance (debe ser compartida con el agente)
+image_cache = InMemoryImageCache()
+
 # =============================================================================
 # Lifecycle Management
 # =============================================================================
@@ -77,10 +95,12 @@ async def lifespan(app: FastAPI):
     global client
     # Startup: Initialize the A2A client
     client = A2AClient(url=agent_url)
-    print(f"✅ FastAPI server started, connected to agent at: {agent_url}")
+    print(f"FastAPI server started, connected to agent at: {agent_url}")
+    print(f"Image storage directory: {IMAGE_STORAGE_DIR}")
     yield
     # Shutdown: Clean up if needed
-    print("🔄 FastAPI server shutting down...")
+    print("FastAPI server shutting down...")
+
 # =============================================================================
 # FastAPI Application
 # =============================================================================
@@ -90,6 +110,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
 # Add CORS middleware to allow frontend connections
 app.add_middleware(
     CORSMiddleware,
@@ -98,6 +119,50 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+def find_image_file(session_id: str, image_id: str) -> Optional[str]:
+    """
+    Find image file by session_id and image_id.
+    First tries the cache, then searches the filesystem.
+    """
+    # Try cache first
+    session_data = image_cache.get(session_id)
+    if session_data and image_id in session_data:
+        image_data = session_data[image_id]
+        if image_data.file_path and os.path.exists(image_data.file_path):
+            return image_data.file_path
+    
+    # Search filesystem if not in cache
+    for ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']:
+        possible_paths = [
+            os.path.join(IMAGE_STORAGE_DIR, f"{image_id}.{ext}"),
+            os.path.join(IMAGE_STORAGE_DIR, session_id, f"{image_id}.{ext}"),
+            os.path.join(IMAGE_STORAGE_DIR, f"image_{image_id}.{ext}"),
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                logger.info(f"Found image file: {path}")
+                return path
+    
+    return None
+
+def get_mime_type_from_file(file_path: str) -> str:
+    """Get MIME type from file extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    mime_types = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+    }
+    return mime_types.get(ext, 'image/png')
+
 # =============================================================================
 # Main API Endpoints
 # =============================================================================
@@ -110,20 +175,17 @@ async def health_check():
         status="healthy",
         agent_url=agent_url
     )
+
 @app.post("/send-message", response_model=MessageResponse)
 async def send_message(request: SendMessageRequest):
     """
     Send a message to the A2A agent and get a response
-    Args:
-        request: SendMessageRequest containing message, optional session_id, and history flag
-    Returns:
-        MessageResponse with agent reply and optional conversation history
     """
     if not client:
         raise HTTPException(status_code=500, detail="A2A client not initialized")
-    # Generate session ID if not provided
+
     session_id = request.session_id or uuid4().hex
-    # Construir el payload SOLO con los campos de params, para TaskSendParams
+
     payload = {
         "id": uuid4().hex,
         "sessionId": session_id,
@@ -134,21 +196,21 @@ async def send_message(request: SendMessageRequest):
         "historyLength": None,
         "metadata": None
     }
+
     try:
-        # Send the task to the agent and get a structured Task response
         task: Task = await client.send_task(payload)
-        # Extract the agent's response
         agent_response = "No response received."
+
         if task.history and len(task.history) > 1:
-            reply = task.history[-1]  # Last message is usually from the agent
+            reply = task.history[-1]
             agent_response = reply.parts[0].text
-        # Prepare response
+
         response = MessageResponse(
             task_id=task.id,
             session_id=session_id,
             agent_response=agent_response
         )
-        # Include history if requested
+
         if request.include_history and task.history:
             response.history = [
                 {
@@ -158,39 +220,33 @@ async def send_message(request: SendMessageRequest):
                 }
                 for msg in task.history
             ]
+
         return response
+
     except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f"[ERROR] send-message failed: {e}\nTraceback:\n{tb}")
         raise HTTPException(
             status_code=500,
             detail=f"Error while sending task to agent: {str(e)}"
         )
+
 @app.get("/session/{session_id}/history", response_model=SessionHistoryResponse)
 async def get_session_history(session_id: str):
-    """
-    Retrieve the conversation history for a specific session
-    Args:
-        session_id: The session ID to retrieve history for
-    Returns:
-        SessionHistoryResponse with the conversation history
-    """
     if not client:
         raise HTTPException(status_code=500, detail="A2A client not initialized")
+
     try:
-        # Send a dummy message to get the session history
-        # This is a limitation of the current A2A design - we need to send a message to get history
         payload = {
             "id": uuid4().hex,
             "sessionId": session_id,
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": ""}]  # Empty message to just get history
+                "parts": [{"type": "text", "text": ""}]
             }
         }
+
         task: Task = await client.send_task(payload)
         history = []
+
         if task.history:
             history = [
                 {
@@ -200,95 +256,90 @@ async def get_session_history(session_id: str):
                 }
                 for msg in task.history
             ]
+
         return SessionHistoryResponse(
             session_id=session_id,
             history=history
         )
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error while retrieving session history: {str(e)}"
         )
+
 @app.post("/session/new")
 async def create_new_session():
-    """
-    Create a new session ID
-    Returns:
-        A new session ID that can be used for subsequent requests
-    """
     return {"session_id": uuid4().hex}
+
 # =============================================================================
-# Image Management Endpoints
+# Image Management Endpoints (CORREGIDO PARA USAR ARCHIVOS DIRECTOS)
 # =============================================================================
-@app.get("/images/{session_id}/{image_id}")
-async def get_image_raw(session_id: str, image_id: str):
+@app.get("/image/{session_id}/{image_id}")
+async def serve_image_direct(session_id: str, image_id: str):
     """
-    Servir imagen por ID y session ID como archivo de imagen crudo
+    Serve image file directly from disk by session_id and image_id.
+    This matches the URL format returned by the ImageGenerationAgent.
     """
-    if not client:
-        raise HTTPException(status_code=500, detail="A2A client not initialized")
     try:
-        # Get image data from the agent
-        payload = {
-            "id": uuid4().hex,
-            "sessionId": session_id,
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": f"GET_IMAGE_DATA {image_id}"}]
-            }
-        }
-        task: Task = await client.send_task(payload)
-        if task.history and len(task.history) > 1:
-            agent_response = task.history[-1].parts[0].text
-            # The agent should return a JSON response with the image data
-            if "JSON_DATA:" in agent_response:
-                try:
-                    # Extract the JSON part
-                    json_str = agent_response.split("JSON_DATA:")[1].strip()
-                    image_info = json.loads(json_str)
-                    
-                    # Check if the image data is available
-                    if image_info.get("found") and image_info.get("bytes"):
-                        # Decode base64
-                        image_bytes = base64.b64decode(image_info["bytes"])
-                        # Determine the mime type from the image info
-                        mime_type = image_info.get("mime_type", "image/png")
-                        return Response(
-                            content=image_bytes,
-                            media_type=mime_type,
-                            headers={
-                                "Content-Disposition": f"inline; filename={image_info.get('name', 'image.png')}"
-                            }
-                        )
-                    else:
-                        raise HTTPException(status_code=404, detail="Image data not found in response")
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=f"Error processing image data: {str(e)}")
-            else:
-                raise HTTPException(status_code=404, detail="No JSON_DATA found in response")
-        else:
-            raise HTTPException(status_code=404, detail="No response from agent")
+        # Find the image file
+        image_path = find_image_file(session_id, image_id)
+        
+        if not image_path:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Image {image_id} not found for session {session_id}"
+            )
+        
+        # Get MIME type
+        mime_type = get_mime_type_from_file(image_path)
+        
+        # Return the file directly
+        return FileResponse(
+            image_path,
+            media_type=mime_type,
+            filename=f"image_{image_id}{os.path.splitext(image_path)[1]}"
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error obtaining image: {str(e)}")
+        logger.error(f"Error serving image {image_id}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error serving image: {str(e)}"
+        )
+
+@app.get("/images/{session_id}/{image_id}")
+async def get_image_raw(session_id: str, image_id: str):
+    """
+    Alternative endpoint for backward compatibility.
+    Redirects to the main image serving endpoint.
+    """
+    return await serve_image_direct(session_id, image_id)
 
 @app.get("/view-image/{session_id}/{image_id}", response_class=HTMLResponse)
 async def view_image(session_id: str, image_id: str):
     """
-    Mostrar imagen en el navegador con una interfaz HTML simple
+    Display image in a beautiful HTML page.
     """
     try:
-        # Get the image data from the server
-        response = await get_image_raw(session_id, image_id)
-        # Extract the image data from the response
-        image_data = response.body
-        # Determine the mime type from the response headers
-        mime_type = response.media_type
-        # Convert to base64 for HTML display
-        base64_data = base64.b64encode(image_data).decode("utf-8")
+        # Check if image exists
+        image_path = find_image_file(session_id, image_id)
         
-        # Create HTML response
+        if not image_path:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Image {image_id} not found"
+            )
+        
+        # Get image info
+        mime_type = get_mime_type_from_file(image_path)
+        file_size = os.path.getsize(image_path)
+        
+        # Create the image URL for embedding
+        image_url = f"/image/{session_id}/{image_id}"
+        
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -411,40 +462,49 @@ async def view_image(session_id: str, image_id: str):
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>🎨 Imagen Generada</h1>
+                    <h1>Imagen Generada</h1>
                 </div>
                 <div class="info">
-                    <h3>📋 Información de la Imagen</h3>
+                    <h3>Información de la Imagen</h3>
                     <div class="info-grid">
                         <div class="info-item">
-                            <strong>🆔 ID</strong><br>
+                            <strong>ID</strong><br>
                             <code>{image_id}</code>
                         </div>
                         <div class="info-item">
-                            <strong>🔗 Sesión</strong><br>
+                            <strong>Sesión</strong><br>
                             <code>{session_id}</code>
                         </div>
                         <div class="info-item">
-                            <strong>🕒 Estado</strong><br>
-                            <span style="color: #28a745;">✅ Disponible</span>
+                            <strong>Tipo</strong><br>
+                            <code>{mime_type}</code>
+                        </div>
+                        <div class="info-item">
+                            <strong>Tamaño</strong><br>
+                            <code>{file_size:,} bytes</code>
+                        </div>
+                        <div class="info-item">
+                            <strong>Estado</strong><br>
+                            <span style="color: #28a745;">Disponible</span>
                         </div>
                     </div>
                 </div>
                 <div class="image-container">
-                    <img src="data:{mime_type};base64,{base64_data}" alt="Imagen generada {image_id}" loading="lazy">
+                    <img src="{image_url}" alt="Imagen generada {image_id}" loading="lazy" 
+                         onerror="this.style.display='none'; document.getElementById('error-msg').style.display='block';">
+                    <div id="error-msg" style="display:none; color: #dc3545; padding: 20px;">
+                        Error cargando la imagen
+                    </div>
                 </div>
                 <div class="actions">
-                    <a href="/images/{session_id}/{image_id}" class="btn download-link" download="image_{image_id}.png">
-                        💾 Descargar Imagen
-                    </a>
-                    <a href="/list-images/{session_id}" class="btn btn-secondary">
-                        📋 Ver Todas las Imágenes
-                    </a>
-                    <a href="/session/new" class="btn btn-tertiary" onclick="window.open(this.href); return false;">
-                        🆕 Nueva Sesión
+                    <a href="{image_url}" class="btn download-link" download="image_{image_id}.png">
+                        Descargar Imagen
                     </a>
                     <a href="/" class="btn">
-                        🏠 Inicio
+                        Inicio
+                    </a>
+                    <a href="javascript:history.back()" class="btn btn-secondary">
+                        Volver
                     </a>
                 </div>
             </div>
@@ -452,8 +512,11 @@ async def view_image(session_id: str, image_id: str):
         </html>
         """
         return HTMLResponse(content=html_content)
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        # Fallback error page
+        logger.error(f"Error displaying image {image_id}: {e}")
         error_html = f"""
         <!DOCTYPE html>
         <html>
@@ -496,27 +559,25 @@ async def view_image(session_id: str, image_id: str):
         </head>
         <body>
             <div class="error-container">
-                <h1>❌ Error</h1>
+                <h1>Error</h1>
                 <div class="error">
                     Error obteniendo imagen {image_id}: {str(e)}
                 </div>
                 <div>
-                    <a href="/list-images/{session_id}" class="btn">📋 Ver Lista</a>
-                    <a href="/" class="btn">🏠 Inicio</a>
+                    <a href="/" class="btn">Inicio</a>
+                    <a href="javascript:history.back()" class="btn">Volver</a>
                 </div>
             </div>
         </body>
         </html>
         """
         return HTMLResponse(content=error_html, status_code=500)
+
 # =============================================================================
 # Root Endpoint
 # =============================================================================
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """
-    Página de inicio con interfaz HTML simple
-    """
     html_content = """
     <!DOCTYPE html>
     <html>
@@ -627,7 +688,7 @@ async def root():
     <body>
         <div class="container">
             <div class="header">
-                <h1>🎨 A2A Image Generator</h1>
+                <h1>A2A Image Generator</h1>
             </div>
             <div class="description">
                 API REST para generar y gestionar imágenes usando CrewAI y Gemini.<br>
@@ -656,18 +717,18 @@ async def root():
                 </div>
             </div>
             <div class="api-endpoints">
-                <h3>🚀 Endpoints Principales</h3>
+                <h3>Endpoints Principales</h3>
                 <div class="endpoint">
                     <span class="method post">POST</span>
                     <strong>/send-message</strong> - Enviar mensaje al agente
                 </div>
                 <div class="endpoint">
                     <span class="method get">GET</span>
-                    <strong>/view-image/{session_id}/{image_id}</strong> - Ver imagen
+                    <strong>/image/{session_id}/{image_id}</strong> - Servir imagen directa
                 </div>
                 <div class="endpoint">
                     <span class="method get">GET</span>
-                    <strong>/list-images/{session_id}</strong> - Listar imágenes de sesión
+                    <strong>/view-image/{session_id}/{image_id}</strong> - Ver imagen con interfaz
                 </div>
                 <div class="endpoint">
                     <span class="method get">GET</span>
@@ -680,10 +741,10 @@ async def root():
             </div>
             <div>
                 <a href="/docs" class="btn" target="_blank">
-                    📚 Documentación API
+                    Documentación API
                 </a>
                 <a href="/session/new" class="btn btn-secondary" onclick="handleNewSession()">
-                    🆕 Nueva Sesión
+                    Nueva Sesión
                 </a>
             </div>
         </div>
@@ -704,13 +765,11 @@ async def root():
     </html>
     """
     return HTMLResponse(content=html_content)
+
 # =============================================================================
 # Main Function
 # =============================================================================
 def main():
-    """
-    Main function to run the FastAPI server
-    """
     parser = argparse.ArgumentParser(description="FastAPI A2A Image Generator Server")
     parser.add_argument(
         "--agent-url", 
@@ -733,21 +792,28 @@ def main():
         action="store_true",
         help="Enable auto-reload for development"
     )
+    
     args = parser.parse_args()
-    # Update global agent URL
+    
     global agent_url
     agent_url = args.agent_url
-    print(f"🚀 Starting FastAPI A2A Image Generator Server...")
-    print(f"📡 Agent URL: {agent_url}")
-    print(f"🌐 Server URL: http://{args.host}:{args.port}")
-    print(f"📚 API Docs: http://{args.host}:{args.port}/docs")
-    print(f"🔄 Auto-reload: {'Enabled' if args.reload else 'Disabled'}")
-    # Run the server using direct app reference instead of module string
+    
+    # Ensure image storage directory exists
+    os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
+    
+    print(f"Starting FastAPI A2A Image Generator Server...")
+    print(f"Agent URL: {agent_url}")
+    print(f"Server URL: http://{args.host}:{args.port}")
+    print(f"API Docs: http://{args.host}:{args.port}/docs")
+    print(f"Image Storage: {IMAGE_STORAGE_DIR}")
+    print(f"Auto-reload: {'Enabled' if args.reload else 'Disabled'}")
+    
     uvicorn.run(
-        app,  # Direct reference to the FastAPI app object
+        app,
         host=args.host,
         port=args.port,
         reload=args.reload
     )
+
 if __name__ == "__main__":
     main()

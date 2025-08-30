@@ -6,16 +6,19 @@
 # - Manages image cache for session persistence
 # - Supports both new image generation and image editing
 # - Integrates CrewAI agents and tasks for structured AI workflows
+# FIXED: Properly returns image URLs to orchestrator via A2A protocol
 # =============================================================================
 
 import asyncio
 import base64
 import logging
 import os
+import os.path
 import re
 from io import BytesIO
 from typing import Dict
 from uuid import uuid4
+import json
 from dotenv import load_dotenv
 
 # CrewAI imports
@@ -34,8 +37,8 @@ from pydantic import BaseModel
 # Load environment variables
 load_dotenv()
 
-# Configure image storage directory
-IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", "generated_images")
+# Configure image storage directory - FIXED TO USE SCRIPT'S DIRECTORY
+IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,28 @@ def get_api_key() -> str:
     return api_key
 
 
+def build_image_url(session_id: str, image_id: str) -> str:
+    """
+    Build the complete URL for accessing an image.
+    
+    Args:
+        session_id: Session identifier
+        image_id: Image identifier
+        
+    Returns:
+        str: Complete URL for the image
+    """
+    # Get host and port from environment, with fallback defaults
+    host = os.getenv('SERVER_HOST', 'localhost')
+    port = os.getenv('SERVER_PORT', '8000')
+    base_url = os.getenv('BASE_URL', f'http://{host}:{port}')
+    
+    # Ensure base_url doesn't end with slash
+    base_url = base_url.rstrip('/')
+    
+    return f"{base_url}/image/{session_id}/{image_id}"
+
+
 @tool("ImageGenerationTool")
 def generate_image_tool(prompt: str, session_id: str, artifact_file_id: str = None) -> str:
     """
@@ -93,7 +118,7 @@ def generate_image_tool(prompt: str, session_id: str, artifact_file_id: str = No
         artifact_file_id: Optional ID of existing image to edit
         
     Returns:
-        str: Generated image ID or error code
+        str: JSON string with image data (ID and URL) or error code
     """
     if not prompt:
         raise ValueError("Prompt cannot be empty")
@@ -168,19 +193,32 @@ def generate_image_tool(prompt: str, session_id: str, artifact_file_id: str = No
                     # Store in cache
                     image_cache.add_image(session_id, image_data)
                     
+                    # Build URL for the generated image
+                    image_url = build_image_url(session_id, image_id)
+                    
                     logger.info(f"Generated image saved to: {file_path}")
-                    return image_data.id
+                    logger.info(f"Generated image URL: {image_url}")
+                    
+                    # Return JSON with both ID and URL for the agent to process
+                    result = {
+                        "success": True,
+                        "image_id": image_id,
+                        "image_url": image_url,
+                        "mime_type": part.inline_data.mime_type,
+                        "name": image_data.name
+                    }
+                    return json.dumps(result)
                     
                 except Exception as e:
                     logger.error(f"Error processing generated image: {e}")
-                    return "ERROR_PROCESSING_IMAGE"
+                    return json.dumps({"success": False, "error": "ERROR_PROCESSING_IMAGE", "details": str(e)})
 
         logger.warning("No image data found in response")
-        return "ERROR_NO_IMAGE_GENERATED"
+        return json.dumps({"success": False, "error": "ERROR_NO_IMAGE_GENERATED"})
 
     except Exception as e:
         logger.error(f"Error in image generation: {e}")
-        return "ERROR_GENERATION_FAILED"
+        return json.dumps({"success": False, "error": "ERROR_GENERATION_FAILED", "details": str(e)})
 
 
 class ImageGenerationAgent:
@@ -202,14 +240,16 @@ class ImageGenerationAgent:
                 role="AI Image Generation Specialist",
                 goal=(
                     "Create stunning, high-quality images based on user descriptions "
-                    "and edit existing images with precision and creativity."
+                    "and edit existing images with precision and creativity. "
+                    "Always return the complete image information including URL."
                 ),
                 backstory=(
                     "You are an advanced AI artist with expertise in visual creation "
                     "and image manipulation. You understand artistic styles, composition, "
                     "lighting, and can transform text descriptions into vivid visual "
                     "representations. You can also skillfully modify existing images "
-                    "based on user requests."
+                    "based on user requests. You always ensure the image URL is properly "
+                    "returned for accessibility."
                 ),
                 verbose=False,
                 allow_delegation=False,
@@ -217,7 +257,7 @@ class ImageGenerationAgent:
                 llm=self.model,
             )
 
-            # Create the image generation task
+            # Create the image generation task - FIXED TO PROPERLY HANDLE TOOL RESPONSE
             self.image_creation_task = Task(
                 description=(
                     "Process the user's request: '{user_prompt}'\n\n"
@@ -231,9 +271,14 @@ class ImageGenerationAgent:
                     "- prompt: The user's request (enhanced if needed for better results)\n"
                     "- session_id: {session_id}\n"
                     "- artifact_file_id: {artifact_file_id} (if editing an existing image)\n\n"
-                    "Return the generated image ID."
+                    "IMPORTANT: The tool will return a JSON response with image data. "
+                    "Parse this JSON response and extract the image_id and image_url. "
+                    "Return ONLY the complete JSON response from the tool."
                 ),
-                expected_output="The unique ID of the generated or modified image",
+                expected_output=(
+                    "The complete JSON response from the ImageGenerationTool containing: "
+                    "success status, image_id, image_url, mime_type, and name"
+                ),
                 agent=self.image_creator_agent,
             )
 
@@ -242,7 +287,7 @@ class ImageGenerationAgent:
                 agents=[self.image_creator_agent],
                 tasks=[self.image_creation_task],
                 process=Process.sequential,
-                verbose=False,
+                verbose=True,  # Enable verbose for debugging
             )
             
             logger.info("ImageGenerationAgent initialized successfully")
@@ -282,29 +327,66 @@ class ImageGenerationAgent:
 
     async def invoke(self, query: str, session_id: str) -> str:
         """
-        Process user request and generate/edit images.
+        Process user request and generate/edit images following A2A protocol standards.
         
         Args:
             query: User's text input
             session_id: Session identifier
             
         Returns:
-            str: Generated image ID or error message
+            str: JSON-RPC 2.0 formatted response per A2A protocol specifications
         """
         try:
-            # ✅ CORRECTED: Return JSON_DATA with image file path
+            # Generate a unique request ID for JSON-RPC tracking
+            request_id = uuid4().hex
+            
+            # Handle image retrieval requests according to A2A standards
             if query.upper().startswith(("GET_IMAGE_DATA", "RETRIEVE_IMAGE", "SHOW_IMAGE")):
                 parts = query.split()
                 if len(parts) > 1:
-                    image_id = parts[-1]  # Last part should be the image ID
+                    image_id = parts[-1]
                     image_data = self.get_image_data(session_id, image_id)
                     
                     if image_data.error:
-                        return f"JSON_DATA: {{\"found\": false, \"error\": \"{image_data.error}\"}}"
+                        # Return proper JSON-RPC error response
+                        error_response = {
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": 404,
+                                "message": "Image not found",
+                                "data": image_data.error
+                            },
+                            "id": request_id
+                        }
+                        return json.dumps(error_response)
                     else:
-                        # Return JSON with file path instead of base64
-                        return f"JSON_DATA: {{\"found\": true, \"file_path\": \"{image_data.file_path}\", \"mime_type\": \"{image_data.mime_type}\", \"name\": \"{image_data.name}\"}}"
-                return "JSON_DATA: {\"found\": false, \"error\": \"Image ID missing\"}"
+                        # Generate URL for image
+                        url = build_image_url(session_id, image_id)
+                        
+                        # Return proper JSON-RPC response with image URL
+                        success_response = {
+                            "jsonrpc": "2.0",
+                            "result": {
+                                "found": True,
+                                "url": url,
+                                "mime_type": image_data.mime_type,
+                                "name": image_data.name,
+                                "id": image_data.id
+                            },
+                            "id": request_id
+                        }
+                        return json.dumps(success_response)
+                else:
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": 400,
+                            "message": "Bad Request",
+                            "data": "Image ID missing in request"
+                        },
+                        "id": request_id
+                    }
+                    return json.dumps(error_response)
             
             # Extract artifact file ID if present
             artifact_file_id = self.extract_artifact_file_id(query)
@@ -319,14 +401,104 @@ class ImageGenerationAgent:
             logger.info(f"Processing request with inputs: {inputs}")
             
             # Execute the crew
-            response = self.image_crew.kickoff(inputs)
+            crew_response = self.image_crew.kickoff(inputs)
+            response_text = str(crew_response).strip() if crew_response else ""
             
-            # Return the response (should be the image ID)
-            return str(response).strip() if response else "ERROR_NO_RESPONSE"
+            logger.info(f"Raw crew response: {response_text}")
             
+            if not response_text:
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": 500,
+                        "message": "No response from image generation crew",
+                        "data": "ERROR_NO_RESPONSE"
+                    },
+                    "id": request_id
+                }
+                return json.dumps(error_response)
+            
+            # Try to parse the crew response as JSON
+            try:
+                # The crew should return the JSON from the tool
+                tool_result = json.loads(response_text)
+                
+                if not tool_result.get("success"):
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": 500,
+                            "message": "Image generation failed",
+                            "data": tool_result.get("error", "Unknown error")
+                        },
+                        "id": request_id
+                    }
+                    return json.dumps(error_response)
+                
+                # Extract image data from tool result
+                image_id = tool_result.get("image_id")
+                image_url = tool_result.get("image_url")
+                mime_type = tool_result.get("mime_type")
+                name = tool_result.get("name")
+                
+                # Return proper JSON-RPC response with image URL
+                success_response = {
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "id": image_id,
+                        "name": name,
+                        "mime_type": mime_type,
+                        "url": image_url,
+                        "status": "generated"
+                    },
+                    "id": request_id
+                }
+                
+                logger.info(f"Returning success response with URL: {image_url}")
+                return json.dumps(success_response)
+                
+            except json.JSONDecodeError:
+                # If response is not JSON, treat it as an error or plain text
+                logger.warning(f"Could not parse crew response as JSON: {response_text}")
+                
+                # Check if it's an error message
+                if response_text.startswith("ERROR"):
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": 500,
+                            "message": "Image generation failed",
+                            "data": response_text
+                        },
+                        "id": request_id
+                    }
+                    return json.dumps(error_response)
+                else:
+                    # Treat as unexpected response format
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": 500,
+                            "message": "Unexpected response format",
+                            "data": response_text
+                        },
+                        "id": request_id
+                    }
+                    return json.dumps(error_response)
+                
         except Exception as e:
             logger.error(f"Error in invoke: {e}")
-            return f"ERROR_INVOKE_FAILED: {str(e)}"
+            request_id = uuid4().hex
+            error_response = {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": 500,
+                    "message": "Internal server error",
+                    "data": f"ERROR_INVOKE_FAILED: {str(e)}"
+                },
+                "id": request_id
+            }
+            return json.dumps(error_response)
 
     def get_image_data(self, session_id: str, image_key: str) -> ImageData:
         """
