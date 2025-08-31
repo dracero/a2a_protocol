@@ -309,6 +309,16 @@ async def serve_image_direct(session_id: str, image_id: str):
             status_code=500, 
             detail=f"Error serving image: {str(e)}"
         )
+    
+@app.get("/image/{image_id}")
+async def get_image(image_id: str):
+    # Construct the full path to the image file
+    image_path = "/media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/pythonAI-Others/a2a_protocol/a2a_multiagent/agents/image_generation/{image_id}.png".format(image_id=image_id)
+    
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    return FileResponse(image_path)   
 
 @app.get("/images/{session_id}/{image_id}")
 async def get_image_raw(session_id: str, image_id: str):
